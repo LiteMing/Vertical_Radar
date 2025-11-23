@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.liteming.viewpoint_radar.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "viewpoint_radar.refmap.json",
+  "client": [
+    "ClientDanmakuCacheMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
