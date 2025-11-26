@@ -119,6 +119,7 @@ dependencies {
     implementation fg.deobf("curse.maven:farmers-delight-398521:6917255")
     implementation fg.deobf("curse.maven:youkais-homecoming-957437:6955538")
     implementation fg.deobf("curse.maven:configured-457570:5180900")
+    //implementation fg.deobf(files("lib/graphutil-forge-1.0.0-mc1.20.1.jar"))
 }
 
 tasks.named('processResources', ProcessResources).configure {

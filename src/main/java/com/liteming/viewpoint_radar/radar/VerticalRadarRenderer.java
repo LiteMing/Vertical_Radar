@@ -27,6 +27,7 @@ public class VerticalRadarRenderer implements IGuiOverlay {
 
     private static final int CIRCLE_SEGMENTS = 24;
     private static final boolean YOUKAI_LOADED = ModList.get().isLoaded("youkaishomecoming");
+    private static final int PLAYER_ICON_SIZE = 8;
 
     @Override
     public void render(ForgeGui gui, GuiGraphics guiGraphics, float partialTick, int screenWidth, int screenHeight) {
@@ -36,8 +37,11 @@ public class VerticalRadarRenderer implements IGuiOverlay {
 
         if (!Config.isRadarActive()) return;
 
-        int centerX = screenWidth / 2;
-        int centerY = screenHeight / 2;
+        int radarWidth = (int) (screenWidth * Config.radarWidthScale);
+        int radarHeight = (int) (screenHeight * Config.radarHeightScale);
+        int radarCenterX = (int) (screenWidth * Config.radarPositionX);
+        int radarCenterY = (int) (screenHeight * Config.radarPositionY - radarHeight / 2.0);
+
         Vec3 playerPos = player.getPosition(partialTick);
 
         double scanDistance = Config.entityScanDistance;
@@ -46,26 +50,28 @@ public class VerticalRadarRenderer implements IGuiOverlay {
                 playerPos.x + scanDistance, playerPos.y + scanDistance, playerPos.z + scanDistance
         );
 
-        // 准备渲染状态
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
         RenderSystem.disableDepthTest();
         RenderSystem.disableCull();
 
-        // 渲染普通实体
+        renderRadarBackground(guiGraphics, radarCenterX, radarCenterY, radarWidth, radarHeight);
+
         for (Entity entity : mc.level.getEntities(null, scanBox)) {
             if (entity == player) continue;
             if (!shouldRenderEntity(entity)) continue;
 
-            renderEntityOnRadar(entity, playerPos, partialTick, centerX, centerY, guiGraphics);
+            renderEntityOnRadar(entity, playerPos, partialTick, radarCenterX, radarCenterY,
+                    guiGraphics, radarWidth, radarHeight);
         }
 
-        // 渲染YH弹幕
         if (YOUKAI_LOADED && Config.showProjectiles) {
-            renderYHDanmaku(playerPos, partialTick, centerX, centerY, guiGraphics, mc);
+            renderYHDanmaku(playerPos, partialTick, radarCenterX, radarCenterY,
+                    guiGraphics, mc);
         }
 
-        // 恢复渲染状态
+        renderPlayerIcon(guiGraphics, radarCenterX, radarCenterY);
+
         RenderSystem.enableDepthTest();
         RenderSystem.enableCull();
         RenderSystem.disableBlend();
@@ -75,9 +81,7 @@ public class VerticalRadarRenderer implements IGuiOverlay {
                                  GuiGraphics guiGraphics, Minecraft mc) {
         try {
             ClientDanmakuCache cache = ClientDanmakuCache.get(mc.level);
-            if (cache == null) return;
 
-            // 使用 Mixin accessor
             Iterable<SimplifiedProjectile> allDanmaku =
                     ((ClientDanmakuCacheAccessor) cache).viewpointRadar$getAllProjectiles();
 
@@ -107,21 +111,193 @@ public class VerticalRadarRenderer implements IGuiOverlay {
                 float renderX = (float) (centerX - transformedPos.x * Config.radarScale);
                 float renderY = (float) (centerY - transformedPos.y * Config.radarScale);
 
-                int color = 0xFFFF00FF;
-                float alphaFactor = 1.0f - (float)(viewDist / Config.maxDisplayDistance);
-                if (alphaFactor < 0.15f) alphaFactor = 0.15f;
-                int alpha = (int) (alphaFactor * 255);
+                float distToPlayer = (float) Math.sqrt(
+                        Math.pow(renderX - centerX, 2) + Math.pow(renderY - centerY, 2)
+                );
+
+                float warningDistance = PLAYER_ICON_SIZE * 3.0f;
+                float dangerDistance = PLAYER_ICON_SIZE + Config.dotSize / 20.0f;
+
+                int color;
+                int alpha;
+
+                if (distToPlayer <= dangerDistance) {
+                    color = 0xFFFF0000;
+                    alpha = 255;
+                } else if (distToPlayer <= warningDistance) {
+                    float ratio = (warningDistance - distToPlayer) / (warningDistance - dangerDistance);
+                    int red = 255;
+                    int green = (int) (255 - ratio * 55);
+                    int blue = (int) (200 - ratio * 200);
+                    color = (red << 16) | (green << 8) | blue;
+                    alpha = 255;
+                } else {
+                    color = 0xFFFF00FF;
+                    float alphaFactor = 1.0f - (float)(viewDist / Config.maxDisplayDistance);
+                    if (alphaFactor < 0.15f) alphaFactor = 0.15f;
+                    alpha = (int) (alphaFactor * 255);
+                }
+
                 color = (color & 0x00FFFFFF) | (alpha << 24);
 
+// 计算弹幕飞行进度：从扫描边界到玩家视角平面（z=0）
+// transformedPos.z 表示弹幕在视角空间中的深度
+// z 接近 maxDisplayDistance 时进度接近0（刚进入扫描范围）
+// z 接近 0 时进度接近1（到达玩家视角平面）
+                float progressRadius = calculateProgressRadius(transformedPos.z, Config.dotSize / 2.0f);
+
+// 先绘制内部半透明进度圆
+                if (Config.showProjectileProgress) {
+                    renderProgressCircle(guiGraphics, renderX, renderY, progressRadius, color);
+                }
+
+// 再绘制外部空心圆
                 renderCircle(guiGraphics, renderX, renderY, Config.dotSize / 2.0f, color);
             }
         } catch (Exception e) {
-            e.printStackTrace(); // 调试时打印错误
+            e.printStackTrace();
         }
     }
 
+    /**
+
+     计算弹幕飞行进度的半径
+
+     @param zDepth 弹幕在视角空间的z深度
+
+     @param maxRadius 最大半径（空心圆的半径）
+
+     @return 进度圆的半径
+     */
+    private float calculateProgressRadius(double zDepth, float maxRadius) {
+// zDepth 范围：0 到 maxDisplayDistance
+// 当 zDepth 接近 maxDisplayDistance 时，进度接近0
+// 当 zDepth 接近 0 时，进度接近1
+
+        double normalizedDepth = zDepth / Config.maxDisplayDistance;
+
+// 反转：距离越近，进度越高
+        double progress = 1 - normalizedDepth;
+
+// 确保进度在 0-1 范围内
+        progress = Math.max(0.0, Math.min(1, progress));
+
+
+// 计算半径：从几乎不可见到填满整个圆
+        float minRadius = (float) (maxRadius * Config.progressMinRadiusPercent); // 改这里
+        return (float) (minRadius + (maxRadius - minRadius) * progress);
+    }
+    private void renderProgressCircle(GuiGraphics guiGraphics, float x, float y, float radius, int color) {
+        PoseStack pose = guiGraphics.pose();
+        pose.pushPose();
+
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        Matrix4f matrix = pose.last().pose();
+        Tesselator tesselator = Tesselator.getInstance();
+        BufferBuilder buffer = tesselator.getBuilder();
+
+// 提取原色并设置半透明
+        int red = (color >> 16) & 0xFF;
+        int green = (color >> 8) & 0xFF;
+        int blue = color & 0xFF;
+        int alpha = (int) (((color >> 24) & 0xFF) * Config.progressCircleAlpha);
+
+
+        buffer.begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_COLOR);
+        buffer.vertex(matrix, x, y, 0).color(red, green, blue, alpha).endVertex();
+        for (int i = 0; i <= CIRCLE_SEGMENTS; i++) {
+            double angle = 2.0 * Math.PI * i / CIRCLE_SEGMENTS;
+            float circleX = x + (float) (Math.cos(angle) * radius);
+            float circleY = y + (float) (Math.sin(angle) * radius);
+            buffer.vertex(matrix, circleX, circleY, 0).color(red, green, blue, alpha).endVertex();
+        }
+        tesselator.end();
+
+        pose.popPose();
+    }
+
+
+    private void renderRadarBackground(GuiGraphics guiGraphics, int centerX, int centerY,
+                                       int width, int height) {
+        float radius = Math.min(width, height) / 2.0f * 0.9f;
+
+        int alpha = (int) (Config.radarBackgroundAlpha * 255);
+        int color = (alpha << 24);
+
+        renderFilledCircle(guiGraphics, centerX, centerY, radius, color);
+    }
+
+    private void renderPlayerIcon(GuiGraphics guiGraphics, int centerX, int centerY) {
+        PoseStack pose = guiGraphics.pose();
+        pose.pushPose();
+
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        Matrix4f matrix = pose.last().pose();
+        Tesselator tesselator = Tesselator.getInstance();
+        BufferBuilder buffer = tesselator.getBuilder();
+
+        int alpha = 255;
+        int red = 255;
+        int green = 255;
+        int blue = 255;
+
+        buffer.begin(VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.POSITION_COLOR);
+
+        float top = centerY - PLAYER_ICON_SIZE;
+        float bottom = centerY + PLAYER_ICON_SIZE;
+        float left = centerX - PLAYER_ICON_SIZE;
+        float right = centerX + PLAYER_ICON_SIZE;
+
+        buffer.vertex(matrix, centerX, top, 0).color(red, green, blue, alpha).endVertex();
+        buffer.vertex(matrix, right, centerY, 0).color(red, green, blue, alpha).endVertex();
+        buffer.vertex(matrix, centerX, centerY, 0).color(red, green, blue, alpha).endVertex();
+
+        buffer.vertex(matrix, right, centerY, 0).color(red, green, blue, alpha).endVertex();
+        buffer.vertex(matrix, centerX, bottom, 0).color(red, green, blue, alpha).endVertex();
+        buffer.vertex(matrix, centerX, centerY, 0).color(red, green, blue, alpha).endVertex();
+
+        buffer.vertex(matrix, centerX, bottom, 0).color(red, green, blue, alpha).endVertex();
+        buffer.vertex(matrix, left, centerY, 0).color(red, green, blue, alpha).endVertex();
+        buffer.vertex(matrix, centerX, centerY, 0).color(red, green, blue, alpha).endVertex();
+
+        buffer.vertex(matrix, left, centerY, 0).color(red, green, blue, alpha).endVertex();
+        buffer.vertex(matrix, centerX, top, 0).color(red, green, blue, alpha).endVertex();
+        buffer.vertex(matrix, centerX, centerY, 0).color(red, green, blue, alpha).endVertex();
+
+        tesselator.end();
+        pose.popPose();
+    }
+
+    private void renderFilledCircle(GuiGraphics guiGraphics, float x, float y, float radius, int color) {
+        PoseStack pose = guiGraphics.pose();
+        pose.pushPose();
+
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        Matrix4f matrix = pose.last().pose();
+        Tesselator tesselator = Tesselator.getInstance();
+        BufferBuilder buffer = tesselator.getBuilder();
+
+        int alpha = (color >> 24) & 0xFF;
+        int red = (color >> 16) & 0xFF;
+        int green = (color >> 8) & 0xFF;
+        int blue = color & 0xFF;
+
+        buffer.begin(VertexFormat.Mode.TRIANGLE_FAN, DefaultVertexFormat.POSITION_COLOR);
+        buffer.vertex(matrix, x, y, 0).color(red, green, blue, alpha).endVertex();
+        for (int i = 0; i <= CIRCLE_SEGMENTS; i++) {
+            double angle = 2.0 * Math.PI * i / CIRCLE_SEGMENTS;
+            float circleX = x + (float) (Math.cos(angle) * radius);
+            float circleY = y + (float) (Math.sin(angle) * radius);
+            buffer.vertex(matrix, circleX, circleY, 0).color(red, green, blue, alpha).endVertex();
+        }
+        tesselator.end();
+
+        pose.popPose();
+    }
+
     private void renderEntityOnRadar(Entity entity, Vec3 playerPos, float partialTick,
-                                     int centerX, int centerY, GuiGraphics guiGraphics) {
+                                     int centerX, int centerY, GuiGraphics guiGraphics,
+                                     int radarWidth, int radarHeight) {
         Vec3 entityPos = entity.getPosition(partialTick);
         Vec3 relativePos = entityPos.subtract(playerPos);
 
@@ -140,6 +316,12 @@ public class VerticalRadarRenderer implements IGuiOverlay {
         float renderX = (float) (centerX - transformedPos.x * Config.radarScale);
         float renderY = (float) (centerY - transformedPos.y * Config.radarScale);
 
+        float maxRadius = Math.min(radarWidth, radarHeight) / 2.0f * 0.9f;
+        float distFromCenter = (float) Math.sqrt(
+                Math.pow(renderX - centerX, 2) + Math.pow(renderY - centerY, 2)
+        );
+        if (distFromCenter > maxRadius) return;
+
         int color = getEntityColor(entity);
 
         float alphaFactor = 1.0f - (float)(dist / Config.maxDisplayDistance);
@@ -150,15 +332,11 @@ public class VerticalRadarRenderer implements IGuiOverlay {
         renderCircle(guiGraphics, renderX, renderY, Config.dotSize / 2.0f, color);
     }
 
-    /**
-     * 使用多层圆环模拟可变线宽的空心圆
-     */
     private void renderCircle(GuiGraphics guiGraphics, float x, float y, float radius, int color) {
         PoseStack pose = guiGraphics.pose();
         pose.pushPose();
 
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
-
         Matrix4f matrix = pose.last().pose();
         Tesselator tesselator = Tesselator.getInstance();
         BufferBuilder buffer = tesselator.getBuilder();
@@ -168,29 +346,20 @@ public class VerticalRadarRenderer implements IGuiOverlay {
         int green = (color >> 8) & 0xFF;
         int blue = color & 0xFF;
 
-        // 计算线宽对应的层数
-        int layers = Math.max(1, (int) Math.ceil(Config.outlineThickness));
-        float radiusStep = (float) (Config.outlineThickness / layers);
+        float innerRadius = Math.max(0, radius - (float)Config.outlineThickness);
 
-        // 绘制多层圆环来模拟线宽
-        for (int layer = 0; layer < layers; layer++) {
-            float currentRadius = radius - (layer * radiusStep);
-            if (currentRadius <= 0) break;
+        buffer.begin(VertexFormat.Mode.TRIANGLE_STRIP, DefaultVertexFormat.POSITION_COLOR);
+        for (int i = 0; i <= CIRCLE_SEGMENTS; i++) {
+            double angle = 2.0 * Math.PI * i / CIRCLE_SEGMENTS;
+            float cos = (float) Math.cos(angle);
+            float sin = (float) Math.sin(angle);
 
-            buffer.begin(VertexFormat.Mode.DEBUG_LINE_STRIP, DefaultVertexFormat.POSITION_COLOR);
-
-            for (int i = 0; i <= CIRCLE_SEGMENTS; i++) {
-                double angle = 2.0 * Math.PI * i / CIRCLE_SEGMENTS;
-                float circleX = x + (float) (Math.cos(angle) * currentRadius);
-                float circleY = y + (float) (Math.sin(angle) * currentRadius);
-
-                buffer.vertex(matrix, circleX, circleY, 0)
-                        .color(red, green, blue, alpha)
-                        .endVertex();
-            }
-
-            tesselator.end();
+            buffer.vertex(matrix, x + cos * innerRadius, y + sin * innerRadius, 0)
+                    .color(red, green, blue, alpha).endVertex();
+            buffer.vertex(matrix, x + cos * radius, y + sin * radius, 0)
+                    .color(red, green, blue, alpha).endVertex();
         }
+        tesselator.end();
 
         pose.popPose();
     }
@@ -200,7 +369,6 @@ public class VerticalRadarRenderer implements IGuiOverlay {
         double dy = relativePos.y;
         double dz = relativePos.z;
 
-        // Yaw rotation
         float yaw = player.getViewYRot(partialTick);
         double yawRad = Math.toRadians(-yaw);
         double cosYaw = Math.cos(yawRad);
@@ -208,21 +376,18 @@ public class VerticalRadarRenderer implements IGuiOverlay {
 
         double x1 = dx * cosYaw - dz * sinYaw;
         double z1 = dx * sinYaw + dz * cosYaw;
-        double y1 = dy;
 
-        // Pitch rotation
         float pitch = player.getViewXRot(partialTick);
         double pitchRad = Math.toRadians(-pitch);
         double cosPitch = Math.cos(pitchRad);
         double sinPitch = Math.sin(pitchRad);
 
-        double y2 = y1 * cosPitch - z1 * sinPitch;
-        double z2 = y1 * sinPitch + z1 * cosPitch;
-        double x2 = x1;
+        double y2 = dy * cosPitch - z1 * sinPitch;
+        double z2 = dy * sinPitch + z1 * cosPitch;
 
         if (z2 < 0) return null;
 
-        return new Vec3(x2, y2, z2);
+        return new Vec3(x1, y2, z2);
     }
 
     private double lerp(float partialTick, double old, double current) {
@@ -241,9 +406,7 @@ public class VerticalRadarRenderer implements IGuiOverlay {
         if (entity instanceof Player && Config.showPlayers) return true;
         if (entity instanceof Projectile && Config.showProjectiles) return true;
         if (entity instanceof LivingEntity && Config.showOtherLiving) {
-            if (!(entity instanceof Enemy) && !(entity instanceof Player)) {
-                return true;
-            }
+            return !(entity instanceof Enemy) && !(entity instanceof Player);
         }
 
         return false;

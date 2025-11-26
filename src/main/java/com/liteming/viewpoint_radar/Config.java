@@ -62,15 +62,60 @@ public class Config {
 
     private static final ForgeConfigSpec.IntValue RADAR_SCALE = BUILDER
             .comment("Pixels per block for radar display (higher = more zoomed in)")
-            .defineInRange("radarScale", 15, 5, 50);
+            .defineInRange("radarScale", 5, 1, 50);
 
     private static final ForgeConfigSpec.IntValue DOT_SIZE = BUILDER
             .comment("Size of the entity dots/circles on radar (diameter in pixels)")
-            .defineInRange("dotSize", 6, 2, 20);
+            .defineInRange("dotSize", 15, 1, 50);
 
     private static final ForgeConfigSpec.DoubleValue OUTLINE_THICKNESS = BUILDER
             .comment("Thickness of the circle outline in pixels (supports decimal values)")
-            .defineInRange("outlineThickness", 1.5, 0.5, 5.0);
+            .defineInRange("outlineThickness", 3, 0.5, 10.0);
+
+    private static final ForgeConfigSpec.DoubleValue RADAR_BACKGROUND_ALPHA = BUILDER
+            .comment("Background transparency (0.0 = fully transparent, 1.0 = fully opaque)")
+            .defineInRange("radarBackgroundAlpha", 0.25, 0.0, 1.0);
+
+    private static final ForgeConfigSpec.DoubleValue RADAR_WIDTH_SCALE = BUILDER
+            .comment("Radar width as a fraction of screen width (e.g., 0.67 = 2/3 of screen)")
+            .defineInRange("radarWidthScale", 0.67, 0.2, 1.0);
+
+    private static final ForgeConfigSpec.DoubleValue RADAR_HEIGHT_SCALE = BUILDER
+            .comment("Radar height as a fraction of screen height (e.g., 0.67 = 2/3 of screen)")
+            .defineInRange("radarHeightScale", 0.67, 0.2, 1.0);
+
+    private static final ForgeConfigSpec.DoubleValue RADAR_POSITION_X = BUILDER
+            .comment("Radar horizontal position (0.0 = left edge, 0.5 = center, 1.0 = right edge)")
+            .defineInRange("radarPositionX", 0.5, 0.0, 1.0);
+
+    private static final ForgeConfigSpec.DoubleValue RADAR_POSITION_Y = BUILDER
+            .comment("Radar vertical position (0.0 = top edge, 1.0 = bottom edge)")
+            .defineInRange("radarPositionY", 1.0, 0.0, 1.0);
+
+    static {
+        BUILDER.pop();
+    }
+
+    // ========== Projectile Progress Settings ==========
+    static {
+        BUILDER.comment("Projectile Progress Indicator Settings").push("projectile_progress");
+    }
+
+    private static final ForgeConfigSpec.BooleanValue SHOW_PROJECTILE_PROGRESS = BUILDER
+            .comment("Show progress indicator inside projectile circles",
+                    "When enabled, a semi-transparent filled circle grows as projectiles approach the player's view plane")
+            .define("showProjectileProgress", true);
+
+    private static final ForgeConfigSpec.DoubleValue PROGRESS_CIRCLE_ALPHA = BUILDER
+            .comment("Opacity of the progress circle (0.0 = fully transparent, 1.0 = fully opaque)")
+            .defineInRange("progressCircleAlpha", 0.4, 0.0, 1.0);
+
+    private static final ForgeConfigSpec.DoubleValue PROGRESS_MIN_RADIUS_PERCENT = BUILDER
+            .comment("Minimum radius of progress circle as a percentage of the outer circle",
+                    "0.05 = 5% (almost invisible when far), 0.1 = 10%, etc.")
+            .defineInRange("progressMinRadiusPercent", 0.01, 0.01, 0.5);
+
+
 
     static {
         BUILDER.pop();
@@ -83,11 +128,11 @@ public class Config {
 
     private static final ForgeConfigSpec.IntValue ENTITY_SCAN_DISTANCE = BUILDER
             .comment("Distance in blocks to scan for entities (affects performance)")
-            .defineInRange("entityScanDistance", 64, 16, 256);
+            .defineInRange("entityScanDistance", 32, 16, 256);
 
     private static final ForgeConfigSpec.IntValue MAX_DISPLAY_DISTANCE = BUILDER
             .comment("Maximum distance in blocks to display entities on radar (must be <= scan distance)")
-            .defineInRange("maxDisplayDistance", 50, 10, 200);
+            .defineInRange("maxDisplayDistance", 32, 10, 200);
 
     static {
         BUILDER.pop();
@@ -110,13 +155,25 @@ public class Config {
     public static int entityScanDistance;
     public static int maxDisplayDistance;
 
+    // Background and position settings
+    public static double radarBackgroundAlpha;
+    public static double radarWidthScale;
+    public static double radarHeightScale;
+    public static double radarPositionX;
+    public static double radarPositionY;
+
+    // NEW: Projectile progress settings
+    public static boolean showProjectileProgress;
+    public static double progressCircleAlpha;
+    public static double progressMinRadiusPercent;
+
     // Runtime toggle (not saved to config)
     public static boolean radarRuntimeEnabled = true;
 
     // ========== Config Reload Handler ==========
     @SubscribeEvent
     static void onLoad(final ModConfigEvent event) {
-        // Load all config values when config is loaded or reloaded
+// Load all config values when config is loaded or reloaded
         radarEnabled = RADAR_ENABLED.get();
         radarToggleKey = RADAR_TOGGLE_KEY.get();
         showEnemies = SHOW_ENEMIES.get();
@@ -130,16 +187,26 @@ public class Config {
         entityScanDistance = ENTITY_SCAN_DISTANCE.get();
         maxDisplayDistance = MAX_DISPLAY_DISTANCE.get();
 
-        // Validate that maxDisplayDistance <= entityScanDistance
+// Background and position settings
+        radarBackgroundAlpha = RADAR_BACKGROUND_ALPHA.get();
+        radarWidthScale = RADAR_WIDTH_SCALE.get();
+        radarHeightScale = RADAR_HEIGHT_SCALE.get();
+        radarPositionX = RADAR_POSITION_X.get();
+        radarPositionY = RADAR_POSITION_Y.get();
+
+// NEW: Load projectile progress settings
+        showProjectileProgress = SHOW_PROJECTILE_PROGRESS.get();
+        progressCircleAlpha = PROGRESS_CIRCLE_ALPHA.get();
+        progressMinRadiusPercent = PROGRESS_MIN_RADIUS_PERCENT.get();
+
+
+// Validate that maxDisplayDistance <= entityScanDistance
         if (maxDisplayDistance > entityScanDistance) {
             maxDisplayDistance = entityScanDistance;
         }
     }
 
     // ========== Toggle Methods ==========
-    public static void toggleRadar() {
-        radarRuntimeEnabled = !radarRuntimeEnabled;
-    }
 
     public static boolean isRadarActive() {
         return radarEnabled && radarRuntimeEnabled;
